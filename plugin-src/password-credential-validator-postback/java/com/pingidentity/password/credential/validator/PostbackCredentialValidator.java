@@ -45,14 +45,12 @@ import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
 
 
-
-
 public class PostbackCredentialValidator implements PasswordCredentialValidator
 {
     private final Log LOG = LogFactory.getLog(PostbackCredentialValidator.class);
 
     private static final String TYPE = "Postback Credential Validator";
-    private static final String TYPE_DESC = "Proof-of-concept PCV to authenticate against an internal web site via form POST";
+    private static final String TYPE_DESC = "Proof-of-concept PCV to authenticate against an internal web site via form POST.";
 
     private static final String USERFIELD = "Username Field";
     private static final String USERFIELD_DESC = "Enter the name of the HTML form parameter for the username.";
@@ -80,7 +78,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     String csrfInput = null;
     String csrfPattern = null;
     String loginUrl = null;
-    String statusCode = null;
+    int statusCode = -1;
     URI parsedLoginUri = null;
 
     @Override
@@ -91,7 +89,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         csrfInput = configuration.getFieldValue(CSRFFIELD);
         csrfPattern = configuration.getFieldValue(PATTERN);
         loginUrl  = configuration.getFieldValue(LOGINURL);
-        statusCode = configuration.getFieldValue(STATUSCODE);
+        statusCode = configuration.getIntFieldValue(STATUSCODE);
         try {
             parsedLoginUri = new URI(loginUrl);
         } catch(URISyntaxException e) {
@@ -102,11 +100,14 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     private class PatternFieldValidator implements FieldValidator {
         @Override
         public void validate(Field field) throws ValidationException {
+            //TODO: This isn't smart enough to verify whether there's at least one capture group.
             String s = field.getValue();
+            String label = field.getName();
             try {
                 Pattern pattern = Pattern.compile(s);
             } catch (PatternSyntaxException e) {
-                throw new ValidationException(e.getMessage());
+                String msg = String.format("% - Pattern failed to compile: ", label, e.getMessage());
+                throw new ValidationException(msg);
             }
         }
     }
@@ -155,7 +156,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         contract.add(RESPONSECODE_ATTRIBUTE);
 
         pluginDescriptor.setAttributeContractSet(contract);
-        pluginDescriptor.setSupportsExtendedContract(false);    //TODO: should this be set to false?
+        pluginDescriptor.setSupportsExtendedContract(true);    //TODO: should this be set to false?
 
         return pluginDescriptor;
     }
@@ -208,7 +209,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
             }
             LOG.info(htmlBody);
 
-            // Extract CSRF token if necessary:
+            // Extract CSRF token if we have a pattern specified.
             if (!csrfPattern.isEmpty()) {
                 Pattern p = Pattern.compile(csrfPattern);
                 Matcher m = p.matcher(htmlBody);
@@ -243,11 +244,11 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
            }
         }
 
-        if (httpStatus == Integer.parseInt(statusCode)) {
+        if (httpStatus == statusCode) {
             attributeMap = new AttributeMap();
             attributeMap.put(USERNAME_ATTRIBUTE, new AttributeValue(username));
             attributeMap.put(CSRFTOKEN_ATTRIBUTE, new AttributeValue(csrfToken));
-            attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(statusCode));
+            attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(statusCode)));
         } else {
             // Authentication failure should return null or an empty map.
             attributeMap = null;
