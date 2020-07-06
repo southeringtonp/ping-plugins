@@ -110,13 +110,19 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     private class PatternFieldValidator implements FieldValidator {
         @Override
         public void validate(Field field) throws ValidationException {
-            //TODO: This isn't smart enough to verify whether there's at least one capture group.
             String s = field.getValue();
             String label = field.getName();
+            // Make sure it's a valid regex
             try {
                 Pattern pattern = Pattern.compile(s);
             } catch (PatternSyntaxException e) {
                 String msg = String.format("% - Pattern failed to compile: ", label, e.getMessage());
+                throw new ValidationException(msg);
+            }
+            // Very naive check for obvious cases where no capture group is specified
+            // TODO: Make this more robust
+            if (!(s.contains("(") && s.contains(")"))) {
+                String msg = String.format("% - Pattern must contain at least one capture group.", label);
                 throw new ValidationException(msg);
             }
         }
@@ -183,8 +189,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     @Override
     public AttributeMap processPasswordCredential(String username, String password) throws PasswordValidationException
     {
-        if (username == null || password == null)
-        {
+        if (username == null || password == null) {
             throw new PasswordValidationException("Unable to validate null credentials.");
         }
 
@@ -202,102 +207,98 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
                     .disableRedirectHandling()
                     .build()) {
 
-            // Initial GET request to establish session cookies (and possibly extract CSRF token)
-            final HttpGet getRequest = new HttpGet(parsedLoginUri);
-            try(final CloseableHttpResponse r = httpclient.execute(getRequest)) {
+                // Initial GET request to establish session cookies (and possibly extract CSRF token)
+                final HttpGet getRequest = new HttpGet(parsedLoginUri);
+                try(final CloseableHttpResponse r = httpclient.execute(getRequest)) {
 
-                final HttpEntity entity = r.getEntity();
-                try {
-                    htmlBody = EntityUtils.toString(entity);
-                } catch(Exception e) {
-                    throw new PasswordValidationException("Error parsing response from backend authentication server.");
-                }
-                EntityUtils.consume(entity);
-    
-                LOG.info("Initial response code for HTTP GET = " + r.getCode());
-                LOG.info("GET request returned cookies: ");
-                final List<Cookie> cookies = cookieJar.getCookies();
-                if (!cookies.isEmpty()) {
-                    for (int i=0; i < cookies.size(); i++) {
-                        LOG.info(cookies.get(i).toString());
+                    final HttpEntity entity = r.getEntity();
+                    try {
+                        htmlBody = EntityUtils.toString(entity);
+                    } catch(Exception e) {
+                        throw new PasswordValidationException("Error parsing response from backend authentication server.");
                     }
-                }
-            }
-            LOG.info(htmlBody);
-
-            // Extract CSRF token if we have a pattern specified.
-            // Fail the authentication if no valid token is found.
-            if (!csrfPattern.isEmpty()) {
-                Pattern p = Pattern.compile(csrfPattern);
-                Matcher m = p.matcher(htmlBody);
-                if (m.find()) {
-                    LOG.info("Found CSRF Token: " + m.group(1));
-                    csrfToken = m.group(1);
-                } else {
-                    LOG.error("No pattern match found for CSRF token.");
-                    return null;
-                }
-            }
+                    EntityUtils.consume(entity);
     
-            // Second request using POST to perform login
-            ClassicRequestBuilder postRequestBuilder = ClassicRequestBuilder.post();
-            postRequestBuilder.setUri(parsedLoginUri);
-            postRequestBuilder.addParameter(userInput, username);
-            postRequestBuilder.addParameter(passInput, password);
-            if (!csrfToken.isEmpty()) {
-                postRequestBuilder.addParameter(csrfInput, csrfToken);
-            }
-            ClassicHttpRequest postRequest = postRequestBuilder.build();
-
-            try (final CloseableHttpResponse r2 = httpclient.execute(postRequest)) {
-                final HttpEntity entity = r2.getEntity();
-                try {
-                    htmlBody = EntityUtils.toString(entity);
-                } catch(Exception e) {
-                    throw new PasswordValidationException("Error parsing response from backend authentication server.");
-                }
-                httpStatus = r2.getCode();
-                EntityUtils.consume(entity);
-                LOG.info("POST response code = " + httpStatus);
-           }
-        }
-
-        if (httpStatus == expectedStatusCode) {
-            attributeMap = new AttributeMap();
-            attributeMap.put(USERNAME_ATTRIBUTE, new AttributeValue(username));
-            attributeMap.put(CSRFTOKEN_ATTRIBUTE, new AttributeValue(csrfToken));
-            attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(httpStatus)));
-
-            if (captureCookies) {
-                // EXPERIMENTAL: Capture cookies from the backend web server as 
-                //    additional values that may be used in the contraca
-                LOG.info("POST request returned cookies: ");
-                final List<Cookie> cookies = cookieJar.getCookies();
-                if (!cookies.isEmpty()) {
-                    for (int i=0; i < cookies.size(); i++) {
-                        String cookieName = cookies.get(i).getName();
-                        if(cookieName != USERNAME_ATTRIBUTE &&  
-                           cookieName != CSRFTOKEN_ATTRIBUTE &&
-                           cookieName != RESPONSECODE_ATTRIBUTE)
-                        {
+                    LOG.info("Initial response code for HTTP GET = " + r.getCode());
+                    LOG.info("GET request returned cookies: ");
+                    final List<Cookie> cookies = cookieJar.getCookies();
+                    if (!cookies.isEmpty()) {
+                        for (int i=0; i < cookies.size(); i++) {
                             LOG.info(cookies.get(i).toString());
-                            LOG.info(cookies.get(i).getName());
-                            LOG.info(cookies.get(i).getValue());
-                        attributeMap.put(cookies.get(i).getName(), cookies.get(i).getValue());
+                        }
                     }
+                }
+                LOG.info(htmlBody);
+
+                // Extract CSRF token if we have a pattern specified.
+                // Fail the authentication if no valid token is found.
+                if (!csrfPattern.isEmpty()) {
+                    Pattern p = Pattern.compile(csrfPattern);
+                    Matcher m = p.matcher(htmlBody);
+                    if (m.find()) {
+                        LOG.info("Found CSRF Token: " + m.group(1));
+                        csrfToken = m.group(1);
+                    } else {
+                        LOG.error("No pattern match found for CSRF token.");
+                        return null;
+                    }
+                }
+    
+                // Second request using POST to perform login
+                ClassicRequestBuilder postRequestBuilder = ClassicRequestBuilder.post();
+                postRequestBuilder.setUri(parsedLoginUri);
+                postRequestBuilder.addParameter(userInput, username);
+                postRequestBuilder.addParameter(passInput, password);
+                if (!csrfToken.isEmpty()) {
+                    postRequestBuilder.addParameter(csrfInput, csrfToken);
+                }
+                ClassicHttpRequest postRequest = postRequestBuilder.build();
+
+                try (final CloseableHttpResponse r2 = httpclient.execute(postRequest)) {
+                    final HttpEntity entity = r2.getEntity();
+                    try {
+                        htmlBody = EntityUtils.toString(entity);
+                    } catch(Exception e) {
+                        throw new PasswordValidationException("Error parsing response from backend authentication server.");
+                    }
+                    httpStatus = r2.getCode();
+                    EntityUtils.consume(entity);
+                    LOG.info("POST response code = " + httpStatus);
                 }
             }
 
+            if (httpStatus == expectedStatusCode) {
+                attributeMap = new AttributeMap();
+                attributeMap.put(USERNAME_ATTRIBUTE, new AttributeValue(username));
+                attributeMap.put(CSRFTOKEN_ATTRIBUTE, new AttributeValue(csrfToken));
+                attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(httpStatus)));
 
-        } else {
-            // Authentication failure should return null or an empty map.
-            attributeMap = null;
-        }
-        return attributeMap;
-
-      } catch(IOException e) {
+                if (captureCookies) {
+                    // EXPERIMENTAL: Capture cookies from the backend web server as 
+                    //    additional values that may be used in the contraca
+                    LOG.info("POST request returned cookies: ");
+                    final List<Cookie> cookies = cookieJar.getCookies();
+                    if (!cookies.isEmpty()) {
+                        for (int i=0; i < cookies.size(); i++) {
+                            String cookieName = cookies.get(i).getName();
+                            if(cookieName != USERNAME_ATTRIBUTE && cookieName != CSRFTOKEN_ATTRIBUTE && cookieName != RESPONSECODE_ATTRIBUTE)
+                            {
+                                LOG.info(cookies.get(i).toString());
+                                //LOG.info(cookies.get(i).getName());
+                                //LOG.info(cookies.get(i).getValue());
+                                attributeMap.put(cookies.get(i).getName(), cookies.get(i).getValue());
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Authentication failure should return null or an empty map.
+                attributeMap = null;
+            }
+            return attributeMap;
+        } catch(IOException e) {
             throw new PasswordValidationException("Error connecting to backend authentication server.");
-      }
+        }
     }
 }
 
