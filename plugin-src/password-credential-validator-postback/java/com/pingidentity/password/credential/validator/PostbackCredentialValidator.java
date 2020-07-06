@@ -78,7 +78,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     String csrfInput = null;
     String csrfPattern = null;
     String loginUrl = null;
-    int statusCode = -1;
+    int expectedStatusCode = -1;
     URI parsedLoginUri = null;
 
     @Override
@@ -89,7 +89,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         csrfInput = configuration.getFieldValue(CSRFFIELD);
         csrfPattern = configuration.getFieldValue(PATTERN);
         loginUrl  = configuration.getFieldValue(LOGINURL);
-        statusCode = configuration.getIntFieldValue(STATUSCODE);
+        expectedStatusCode = configuration.getIntFieldValue(STATUSCODE);
         try {
             parsedLoginUri = new URI(loginUrl);
         } catch(URISyntaxException e) {
@@ -138,10 +138,10 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         csrfPatternInputDescriptor.addValidator(new PatternFieldValidator());
         guiDescriptor.addAdvancedField(csrfPatternInputDescriptor);
 
-        TextFieldDescriptor statusCodeDescriptor = new TextFieldDescriptor(STATUSCODE, STATUSCODE_DESC);
-        statusCodeDescriptor.setDefaultValue("301");
-        statusCodeDescriptor.addValidator(new IntegerValidator(200,599),true);
-        guiDescriptor.addAdvancedField(statusCodeDescriptor);
+        TextFieldDescriptor expectedStatusCodeDescriptor = new TextFieldDescriptor(STATUSCODE, STATUSCODE_DESC);
+        expectedStatusCodeDescriptor.setDefaultValue("301");
+        expectedStatusCodeDescriptor.addValidator(new IntegerValidator(200,599),true);
+        guiDescriptor.addAdvancedField(expectedStatusCodeDescriptor);
 
         TextFieldDescriptor loginUrlDescriptor = new TextFieldDescriptor(LOGINURL, LOGINURL_DESC);
         loginUrlDescriptor.addValidator(new URLValidator(true));
@@ -244,16 +244,15 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
            }
         }
 
-        if (httpStatus == statusCode) {
+        if (httpStatus == expectedStatusCode) {
             attributeMap = new AttributeMap();
             attributeMap.put(USERNAME_ATTRIBUTE, new AttributeValue(username));
             attributeMap.put(CSRFTOKEN_ATTRIBUTE, new AttributeValue(csrfToken));
-            attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(statusCode)));
+            attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(httpStatus)));
         } else {
             // Authentication failure should return null or an empty map.
             attributeMap = null;
         }
-        
         return attributeMap;
 
       } catch(IOException e) {
