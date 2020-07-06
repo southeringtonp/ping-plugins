@@ -8,6 +8,8 @@ import org.sourceid.saml20.adapter.attribute.AttributeValue;
 import org.sourceid.saml20.adapter.conf.Configuration;
 import org.sourceid.saml20.adapter.conf.Field;
 import org.sourceid.saml20.adapter.gui.TextFieldDescriptor;
+import org.sourceid.saml20.adapter.gui.CheckBoxFieldDescriptor;
+import org.sourceid.saml20.adapter.gui.TableDescriptor;
 import org.sourceid.saml20.adapter.gui.validation.FieldValidator;
 import org.sourceid.saml20.adapter.gui.validation.ValidationException;
 import org.sourceid.saml20.adapter.gui.validation.impl.RequiredFieldValidator;
@@ -50,7 +52,9 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     private final Log LOG = LogFactory.getLog(PostbackCredentialValidator.class);
 
     private static final String TYPE = "Postback Credential Validator";
-    private static final String TYPE_DESC = "Proof-of-concept PCV to authenticate against an internal web site via form POST.";
+    private static final String TYPE_DESC = "Proof-of-concept PCV to authenticate against an internal web site via form POST. "
+        + "This PCV will first perform an HTTP GET request against the internal URL to set any required session cookies, then "
+        + "POST the user's username and password into the page.";
 
     private static final String USERFIELD = "Username Field";
     private static final String USERFIELD_DESC = "Enter the name of the HTML form parameter for the username.";
@@ -63,10 +67,14 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         + "Leave blank if the application does not require an anti-CSRF token.";
     private static final String PATTERN = "CSRF Pattern";
     private static final String PATTERN_DESC = "Enter a regular expression to extract Anti-CSRF tokens. "
-        + "The first matching group should contain the CSRF token value.";
+        + "The first matching group should contain the CSRF token value. Leave blank if CSRF tokens are not used.";
     private static final String STATUSCODE = "Successful Status Code";
     private static final String STATUSCODE_DESC = "Enter the expected HTTP status code for successful login (typically 301 or 302). "
-        + "Responses that do not match this status code will be treated as login failures.";
+        + "HTTP Responses that do not match this status code will be treated as login failures.";
+    private static final String CAPTURECOOKIES = "Capture cookes";
+    private static final String CAPTURECOOKIES_DESC = "Check this box to make cookies from the internal server available to be "
+        + "provided to other adapters via the extended contract. In addition to enabling here, you must also add the desired "
+        + "cookie names (e.g., PHPSESSION) to the extended contract.";
 
     // Names for the contract
     private static final String USERNAME_ATTRIBUTE = "username";
@@ -79,6 +87,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
     String csrfPattern = null;
     String loginUrl = null;
     int expectedStatusCode = -1;
+    boolean captureCookies = false;
     URI parsedLoginUri = null;
 
     @Override
@@ -90,6 +99,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         csrfPattern = configuration.getFieldValue(PATTERN);
         loginUrl  = configuration.getFieldValue(LOGINURL);
         expectedStatusCode = configuration.getIntFieldValue(STATUSCODE);
+        captureCookies = configuration.getBooleanFieldValue(CAPTURECOOKIES);
         try {
             parsedLoginUri = new URI(loginUrl);
         } catch(URISyntaxException e) {
@@ -147,7 +157,10 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         loginUrlDescriptor.addValidator(new URLValidator(true));
         loginUrlDescriptor.addValidator(requiredFieldValidator);
         guiDescriptor.addField(loginUrlDescriptor);
-    
+
+        CheckBoxFieldDescriptor captureCookiesDescriptor = new CheckBoxFieldDescriptor(CAPTURECOOKIES, CAPTURECOOKIES_DESC);
+        guiDescriptor.addAdvancedField(captureCookiesDescriptor);
+
         PluginDescriptor pluginDescriptor = new PluginDescriptor(TYPE, this, guiDescriptor);
 
         Set<String> contract = new HashSet<String>();
@@ -156,7 +169,10 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
         contract.add(RESPONSECODE_ATTRIBUTE);
 
         pluginDescriptor.setAttributeContractSet(contract);
-        pluginDescriptor.setSupportsExtendedContract(true);    //TODO: should this be set to false?
+
+        // Setting this to true allows us to use the extended contract settings implicitly
+        // when the captureCookies option is enabled.
+        pluginDescriptor.setSupportsExtendedContract(true);
 
         return pluginDescriptor;
     }
@@ -210,6 +226,7 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
             LOG.info(htmlBody);
 
             // Extract CSRF token if we have a pattern specified.
+            // Fail the authentication if no valid token is found.
             if (!csrfPattern.isEmpty()) {
                 Pattern p = Pattern.compile(csrfPattern);
                 Matcher m = p.matcher(htmlBody);
@@ -217,7 +234,8 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
                     LOG.info("Found CSRF Token: " + m.group(1));
                     csrfToken = m.group(1);
                 } else {
-                    LOG.warn("No pattern match found for CSRF token.");
+                    LOG.error("No pattern match found for CSRF token.");
+                    return null;
                 }
             }
     
@@ -249,6 +267,28 @@ public class PostbackCredentialValidator implements PasswordCredentialValidator
             attributeMap.put(USERNAME_ATTRIBUTE, new AttributeValue(username));
             attributeMap.put(CSRFTOKEN_ATTRIBUTE, new AttributeValue(csrfToken));
             attributeMap.put(RESPONSECODE_ATTRIBUTE, new AttributeValue(Integer.toString(httpStatus)));
+
+            if (captureCookies) {
+                // EXPERIMENTAL: Capture cookies from the backend web server as 
+                //    additional values that may be used in the contraca
+                LOG.info("POST request returned cookies: ");
+                final List<Cookie> cookies = cookieJar.getCookies();
+                if (!cookies.isEmpty()) {
+                    for (int i=0; i < cookies.size(); i++) {
+                        String cookieName = cookies.get(i).getName();
+                        if(cookieName != USERNAME_ATTRIBUTE &&  
+                           cookieName != CSRFTOKEN_ATTRIBUTE &&
+                           cookieName != RESPONSECODE_ATTRIBUTE)
+                        {
+                            LOG.info(cookies.get(i).toString());
+                            LOG.info(cookies.get(i).getName());
+                            LOG.info(cookies.get(i).getValue());
+                        attributeMap.put(cookies.get(i).getName(), cookies.get(i).getValue());
+                    }
+                }
+            }
+
+
         } else {
             // Authentication failure should return null or an empty map.
             attributeMap = null;
